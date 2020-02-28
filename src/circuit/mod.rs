@@ -23,6 +23,7 @@ pub mod expression;
 
 pub mod sapling;
 pub mod sprout;
+pub mod schnorr;
 
 use bellman::{
     SynthesisError

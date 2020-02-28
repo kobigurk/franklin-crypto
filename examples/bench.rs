@@ -3,41 +3,39 @@ extern crate bellman_ce as bellman;
 extern crate rand;
 
 use std::time::{Duration, Instant};
-use franklin_crypto::jubjub::{
-    JubjubBls12,
-    edwards,
-    fs,
+
+use bellman::pairing::ff::{
+    PrimeField,
+    PrimeFieldRepr,
+    Field,
 };
-use franklin_crypto::circuit::sapling::{
-    Spend
+
+
+
+use franklin_crypto::alt_babyjubjub::{AltJubjubBn256, fs, edwards, FixedGenerators};
+use franklin_crypto::circuit::schnorr::{
+    Schnorr
 };
-use franklin_crypto::primitives::{
-    Diversifier,
-    ProofGenerationKey,
-    ValueCommitment
-};
+use franklin_crypto::eddsa::{PrivateKey, PublicKey, Seed, Signature};
 
 use bellman::groth16::*;
 use rand::{XorShiftRng, SeedableRng, Rng};
-use bellman::pairing::bls12_381::{Bls12, Fr};
-
-const TREE_DEPTH: usize = 32;
+use bellman::pairing::bn256::{Bn256, Fr};
 
 fn main() {
-    let jubjub_params = &JubjubBls12::new();
+    let jubjub_params = &AltJubjubBn256::new();
+    let p_g = FixedGenerators::SpendingKeyGenerator;
     let rng = &mut XorShiftRng::from_seed([0x3dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
 
     println!("Creating sample parameters...");
-    let groth_params = generate_random_parameters::<Bls12, _, _>(
-        Spend {
+    let groth_params = generate_random_parameters::<Bn256, _, _>(
+        Schnorr {
             params: jubjub_params,
-            value_commitment: None,
-            proof_generation_key: None,
-            payment_address: None,
-            commitment_randomness: None,
-            ar: None,
-            auth_path: vec![None; TREE_DEPTH],
-            anchor: None
+            generator: p_g,
+            r: None,
+            h: None,
+            s: None,
+            pk: None,
         },
         rng
     ).unwrap();
@@ -46,51 +44,34 @@ fn main() {
 
     let mut total_time = Duration::new(0, 0);
     for _ in 0..SAMPLES {
-        let value_commitment = ValueCommitment {
-            value: 1,
-            randomness: rng.gen()
-        };
-
-        let nsk: fs::Fs = rng.gen();
-        let ak = edwards::Point::rand(rng, jubjub_params).mul_by_cofactor(jubjub_params);
-
-        let proof_generation_key = ProofGenerationKey {
-            ak: ak.clone(),
-            nsk: nsk.clone()
-        };
-
-        let viewing_key = proof_generation_key.into_viewing_key(jubjub_params);
-
-        let payment_address;
-
-        loop {
-            let diversifier = Diversifier(rng.gen());
-
-            if let Some(p) = viewing_key.into_payment_address(
-                diversifier,
-                jubjub_params
-            )
-            {
-                payment_address = p;
-                break;
-            }
-        }
-
-        let commitment_randomness: fs::Fs = rng.gen();
-        let auth_path = vec![Some((rng.gen(), rng.gen())); TREE_DEPTH];
-        let ar: fs::Fs = rng.gen();
-        let anchor: Fr = rng.gen();
-
         let start = Instant::now();
-        let _ = create_random_proof(Spend {
+
+        let sk = PrivateKey::<Bn256>(rng.gen());
+        let vk = PublicKey::from_private(&sk, p_g, jubjub_params);
+        let msg = b"Foo bar";
+        let seed = Seed::random_seed(rng, msg);
+        let sig = sk.sign_schnorr_blake2s(msg, &seed, p_g, jubjub_params);
+        assert!(vk.verify_schnorr_blake2s(msg, &sig, p_g, jubjub_params));
+
+        /*
+        let mut s_bytes = [0u8; 32];
+        sig.s.into_repr().write_le(& mut s_bytes[..]).expect("get LE bytes of signature S");
+        let mut s_repr = <Fr as PrimeField>::Repr::from(0);
+        s_repr.read_le(&s_bytes[..]).expect("interpret S as field element representation");
+
+        let mut h_bytes = [0u8; 32];
+        sig.h.into_repr().write_le(& mut h_bytes[..]).expect("get LE bytes of signature H");
+        let mut h_repr = <Fr as PrimeField>::Repr::from(0);
+        h_repr.read_le(&h_bytes[..]).expect("interpret H as field element representation");
+        */
+
+        let _ = create_random_proof(Schnorr {
             params: jubjub_params,
-            value_commitment: Some(value_commitment),
-            proof_generation_key: Some(proof_generation_key),
-            payment_address: Some(payment_address),
-            commitment_randomness: Some(commitment_randomness),
-            ar: Some(ar),
-            auth_path: auth_path,
-            anchor: Some(anchor)
+            generator: p_g,
+            r: Some(sig.r),
+            h: Some(sig.h),
+            s: Some(sig.s),
+            pk: Some(vk.0),
         }, &groth_params, rng).unwrap();
         total_time += start.elapsed();
     }

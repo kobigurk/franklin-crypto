@@ -78,6 +78,13 @@ pub struct Signature<E: JubjubEngine> {
     pub s: E::Fs,
 }
 
+#[derive(Clone)]
+pub struct SignatureWithH<E: JubjubEngine> {
+    pub r: Point<E, Unknown>,
+    pub s: E::Fs,
+    pub h: E::Fs,
+}
+
 pub struct PrivateKey<E: JubjubEngine>(pub E::Fs);
 
 #[derive(Clone)]
@@ -243,7 +250,7 @@ impl<E: JubjubEngine> PrivateKey<E> {
         seed: &Seed<E>,
         p_g: FixedGenerators,
         params: &E::Params,
-    ) -> Signature<E> {
+    ) -> SignatureWithH<E> {
         let pk = PublicKey::from_private(&self, p_g, params);
         let order_check = pk.0.mul(E::Fs::char(), params);
         assert!(order_check.eq(&Point::zero()));
@@ -269,11 +276,12 @@ impl<E: JubjubEngine> PrivateKey<E> {
 
         // S = r + H*(R_X || M) . sk
         let mut s = h_star_s::<E>(&concatenated[..], &msg_padded[..]);
+        let h = s.clone();
         s.mul_assign(&self.0);
         s.add_assign(&seed.0);
     
         let as_unknown = Point::from(r_g);
-        Signature { r: as_unknown, s: s }
+        SignatureWithH { r: as_unknown, s: s, h: h }
     }
 
     // sign a message by following MuSig protocol, with public key being just a trivial key,
@@ -544,7 +552,7 @@ impl<E: JubjubEngine> PublicKey<E> {
     pub fn verify_schnorr_blake2s(
         &self,
         msg: &[u8],
-        sig: &Signature<E>,
+        sig: &SignatureWithH<E>,
         p_g: FixedGenerators,
         params: &E::Params,
     ) -> bool {

@@ -47,6 +47,13 @@ pub struct EddsaSignature<E: JubjubEngine> {
     pub pk: EdwardsPoint<E>
 }
 
+#[derive(Clone)]
+pub struct EddsaSignaturePrecomputed<E: JubjubEngine> {
+    pub r: EdwardsPoint<E>,
+    pub s: Option<E::Fs>,
+    pub pk: EdwardsPoint<E>
+}
+
 use ::alt_babyjubjub::{fs::Fs};
 
 use constants::{MATTER_EDDSA_BLAKE2S_PERSONALIZATION};
@@ -328,6 +335,79 @@ impl <E: JubjubEngine>EddsaSignature<E> {
         return Ok(());
     }
 } 
+
+impl <E: JubjubEngine>EddsaSignaturePrecomputed<E> {
+    pub fn verify_schnorr_blake2s_precomputed<CS>(
+        &self,
+        mut cs: CS,
+        params: &E::Params,
+        h: &[Boolean],
+        generator: EdwardsPoint<E>
+    ) -> Result<(), SynthesisError>
+        where CS: ConstraintSystem<E>
+    {
+        // TODO check that s < Fs::Char
+        let scalar_bits = field_into_boolean_vec_le(
+            cs.namespace(|| "Get S bits"),
+            self.s,
+        )?;
+
+        let sb = generator.mul(
+            cs.namespace(|| "S*B computation"),
+            &scalar_bits, params
+        )?;
+
+        // h = Hash(R_X || message)
+
+        // only order of R is checked. Public key and generator can be guaranteed to be in proper group!
+        // by some other means for out particular case
+        self.r.assert_not_small_order(
+            cs.namespace(|| "R is in right order"),
+            &params
+        )?;
+
+        let mut hash_bits: Vec<Boolean> = vec![];
+
+        let r_x_serialized = field_into_boolean_vec_le(
+            cs.namespace(|| "Serialize R_X"), self.r.get_x().get_value()
+        )?;
+
+        let pk_mul_hash = self.pk.mul(
+            cs.namespace(|| "Calculate h*PK"), 
+            &h, 
+            params
+        )?;
+
+        let rhs = pk_mul_hash.add(
+            cs.namespace(|| "Make signature RHS"), 
+            &self.r, 
+            params
+        )?;
+
+        let rhs_x = rhs.get_x();
+        let rhs_y = rhs.get_y();
+
+        let sb_x = sb.get_x();
+        let sb_y = sb.get_y();
+
+        let one = CS::one();
+        cs.enforce(
+            || "check x coordinate of signature",
+            |lc| lc + rhs_x.get_variable(),
+            |lc| lc + one,
+            |lc| lc + sb_x.get_variable()
+        );
+
+        cs.enforce(
+            || "check y coordinate of signature",
+            |lc| lc + rhs_y.get_variable(),
+            |lc| lc + one,
+            |lc| lc + sb_y.get_variable()
+        );
+
+        return Ok(());
+    }
+}
 
 
 #[cfg(test)]
